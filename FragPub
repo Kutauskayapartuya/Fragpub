@@ -1,0 +1,636 @@
+local frag = {};
+--
+frag.varis = {
+    camera      = workspace.CurrentCamera;
+    runservice  = game:GetService("RunService");
+    userinput   = game:GetService("UserInputService");
+    localchar   = workspace.Ignore.LocalCharacter
+}
+--
+frag.aim = {
+    enabled     = false;
+    smooth      = 1;
+    fov         = 0;
+    realfov     = 0;
+    dynamic     = false;
+    autocalc    = false;
+    teamcheck   = false;
+    aicheck     = false;
+}
+--
+frag.hitbox = {
+    enabled     = false;
+    width       = 6;
+    height      = 6;
+    tpe         = "Head";
+    teamcheck   = false;
+    aicheck     = false;
+}
+--
+frag.exploits = {
+    enabled     = false;
+    longneck    = false;
+    jumpshoot   = false;
+    omnisprint  = false;
+}
+--
+frag.esp = {
+    enabled         = false;
+    box             = false;
+    name            = false;
+    weapon          = false;
+    healtbar        = false;
+    sleep           = false;
+    maxdist         = 1500;
+    boxtype         = "corner";
+    fonts       = {};
+}
+--
+frag.target     = nil;
+frag.holding    = false;
+frag.aiming     = false;
+--
+local fovcircle = Drawing.new("Circle")
+fovcircle.Position = Vector2.new(frag.varis.camera.ViewportSize.X / 2, frag.varis.camera.ViewportSize.Y / 2)
+fovcircle.Radius = 1.5
+fovcircle.Color = Color3.fromRGB(255, 255, 255)
+fovcircle.Visible = false
+--
+for _,v in pairs(game:GetService("ReplicatedStorage").HandModels:GetChildren()) do v:SetAttribute("name", v.Name) end; -- Set Names
+--
+do -- fonts
+    function frag.esp:registerfont(Name, Weight, Style, Asset)
+        if not isfile(Asset.Id) then writefile(Asset.Id, Asset.Font) end
+        if isfile(Name .. ".font") then delfile(Name .. ".font") end
+        local Data = {
+            name = Name,
+            faces = {
+                {
+                    name = "Regular",
+                    weight = Weight,
+                    style = Style,
+                    assetId = getcustomasset(Asset.Id),
+                },
+            },
+        }
+        writefile(Name .. ".font", game:GetService("HttpService"):JSONEncode(Data))
+        return getcustomasset(Name .. ".font");
+    end
+    frag.esp.fonts.smallestpixel7 = Font.new(frag.esp:registerfont("smallestpixel7", 200, "normal", {
+        Id = "smallest_pixel-7.ttf",
+        Font = crypt.base64.decode(game:HttpGet("https://efial.wtf/Main/SmallestPixel"))
+    }))
+end
+--
+do -- player func
+    function frag:sleepcheck(Player)
+        local Animations = Player:FindFirstChild("AnimationController") and Player.AnimationController:GetPlayingAnimationTracks();
+        for _,v in pairs(Animations) do
+            if (v.IsPlaying and v.Animation.AnimationId == "rbxassetid://13280887764") then
+                return true;
+            end;
+        end;
+        return false;
+    end;
+    --
+    function frag:AICheck(Player, type)
+        if (frag.aim.aicheck and type == "aim" and Player:FindFirstChild("Head") and Player.Head.CollisionGroup == "NPC") then
+            return true;
+        elseif (frag.hitbox.aicheck and type == "hitbox" and Player:FindFirstChild("Head") and Player.Head.CollisionGroup == "NPC") then
+            return true;
+        end;
+        return false;
+    end;
+    --
+    function frag:TeamCheck(Player, type)
+        if (frag.aim.teamcheck and type == "aim" and Player:FindFirstChild("Head") and Player.Head.Dot.Enabled) then
+            return true;
+        elseif (frag.hitbox.teamcheck and type == "hitbox" and Player:FindFirstChild("Head") and Player.Head.Dot.Enabled) then
+            return true
+        end
+        return false;
+    end;
+    --
+    function frag:getplayer()
+        local closest = nil;
+        local closestMagnitude = math.huge;
+        local middle = frag.varis.camera.ViewportSize / 2;
+        for _,v in pairs(workspace:GetChildren()) do
+            if (v:FindFirstChild("HumanoidRootPart") and not frag:sleepcheck(v) and not frag:AICheck(v, "aim") and not frag:TeamCheck(v, "aim")) then
+                local PartPos, OnScreen = frag.varis.camera.WorldToViewportPoint(frag.varis.camera, v:GetPivot().Position);
+                local Magnitude = (Vector2.new(PartPos.X, PartPos.Y) - middle).magnitude;
+                if (Magnitude < fovcircle.Radius and Magnitude < closestMagnitude and OnScreen) then
+                    closestMagnitude = Magnitude;
+                    closest = v;
+                end;
+            end;
+        end;
+        return closest;
+    end;
+end;
+--
+do -- 
+    frag.varis.userinput.InputBegan:Connect(function(_, gme)
+        if gme then return end
+        --
+        if (frag.holding and not frag.target and not frag.aiming) then
+            frag.aiming = true
+            repeat task.wait() until frag:getplayer() ~= nil and frag.aiming
+            if frag.aiming and frag:getplayer() ~= nil then
+                frag.target = frag:getplayer()
+            end
+        end
+    end)
+    
+    frag.varis.userinput.InputEnded:Connect(function(_, gme)
+        if gme then return end
+        --
+        if (not frag.holding and frag.aiming) then
+            frag.target = nil
+            frag.aiming = false
+        end
+    end)
+end
+--
+local CurrentPos = Vector3.new(0, 0, 0)
+local LastVelocity = Vector3.new(0, 0, 0)
+do -- weapon funs
+    function frag:CalculateVelocity(PlayerPart, CurrentPos, LastVelocity, Delta)
+        local Vel = (PlayerPart.Position - CurrentPos) / Delta * 0.18;
+        LastVelocity = LastVelocity:Lerp(Vel, 0.1)
+        return LastVelocity, PlayerPart.Position;
+    end;
+
+    local projectileinfo = {
+        AR15            = {Speed = 1300, Drop = 3};
+        Blunderbuss     = {Speed = 600, Drop = 3.5};
+        Bow             = {Speed = 300, Drop = 3};
+        C9              = {Speed = 600, Drop = 3};
+        Crossbow        = {Speed = 450, Drop = 3};
+        EnergyRifle     = {Speed = 2000, Drop = 1.1};
+        GaussRifle      = {Speed = 3000, Drop = 2};
+        HMAR            = {Speed = 1000, Drop = 3.5};
+        LeverActionRifle= {Speed = 1200, Drop = 1.5};
+        M4A1            = {Speed = 1300, Drop = 4};
+        PipePistol      = {Speed = 500, Drop = 3};
+        PipeSMG         = {Speed = 600, Drop = 3};
+        PumpShotgun     = {Speed = 600, Drop = 2};
+        SCAR            = {Speed = 1300, Drop = 4};
+        SVD             = {Speed = 1400, Drop = 2};
+        USP9            = {Speed = 600, Drop = 3};
+        UZI             = {Speed = 600, Drop = 3};
+        None            = {Speed = 3000, Drop = 1};
+    }
+    function frag:GetHoldingWeapon()
+        if workspace.Ignore:FindFirstChild("FPSArms") and workspace.Ignore.FPSArms:FindFirstChild("HandModel") then
+            local HandModel = workspace.Ignore.FPSArms.HandModel
+            if HandModel and HandModel:GetAttribute("name") then
+                return tostring(HandModel:GetAttribute("name"))
+            end
+        end
+        return "None"
+    end
+    function frag:GetProjectileInfo()
+        local Weapon = frag:GetHoldingWeapon()
+        if Weapon then
+            local Info = projectileinfo[Weapon]
+            return Info.Speed, Info.Drop
+        end
+        return 0, 0
+    end
+
+    function frag:GetPrediction(tVel)
+        local ps, pd = frag:GetProjectileInfo()
+        -- no I will not put my prediction math in here
+        --
+        return Vector3.new(0, 0, 0)
+    end;
+end
+--
+do -- esp
+    local CreateClass = function(Class, Properties)
+        local ClassInt = typeof(Class) == "string" and Instance.new(Class) or Class
+        --
+        for Property, Value in next, Properties do
+            ClassInt[Property] = Value
+        end
+        --
+        return ClassInt
+    end
+
+    local ESPHolder = CreateClass("ScreenGui", {
+        Parent = game:GetService("CoreGui");
+        Name   = "ESPHolder";
+    })
+
+    local DistanceCheck = function(Player)
+        return math.floor((Player.Position - frag.varis.camera.CFrame.Position).Magnitude)
+    end 
+
+    local ESP = function(plr)
+        -- Dupe Check
+        --coroutine.wrap(DupeCheck)(plr)
+        --
+        local MainFrame         = CreateClass("Frame", {Parent = ESPHolder; Name = "Player"})
+        local MainFrameOutline  = CreateClass("UIStroke", {Parent = MainFrame; Name = "MainFrameStroke"})
+        local OutlineFrame      = CreateClass("Frame", {Parent = MainFrame; Name = "Player"; Size = UDim2.new(1, 0, 1, 0); BackgroundTransparency = 1})
+        local MainFrameOutline2 = CreateClass("UIStroke", {Parent = OutlineFrame; Name = "MainFrameStroke"})
+        local NameLabel         = CreateClass("TextLabel", {Parent = ESPHolder; Name = "Name"; BackgroundTransparency = 1; Size = UDim2.new(0, 100, 0, 20); FontFace = frag.esp.fonts.smallestpixel7; AnchorPoint = Vector2.new(0.5, 0.5); Position = UDim2.new(0.5, 0, 0, -11); TextSize = 11; TextColor3 = Color3.fromRGB(255, 255, 255); TextStrokeTransparency = 0; TextStrokeColor3 = Color3.new(0, 0, 0), RichText = true})
+        local WeaponLabel       = CreateClass("TextLabel", {Parent = ESPHolder; Name = "Weapon"; BackgroundTransparency = 1; Size = UDim2.new(0, 100, 0, 20); FontFace = frag.esp.fonts.smallestpixel7; AnchorPoint = Vector2.new(0.5, 0.5); Position = UDim2.new(0.5, 0, 1, 0); TextSize = 11; TextColor3 = Color3.fromRGB(255, 255, 255); TextStrokeTransparency = 0; TextStrokeColor3 = Color3.new(0, 0, 0), RichText = true})
+        --
+        local LeftTop 			= CreateClass("Frame", {Name = "LeftTop"; ZIndex = 1; Parent = ESPHolder, BackgroundColor3 = Color3.fromRGB(255, 255, 255), Position = UDim2.new(0, 0, 0, 0)})
+        local LeftSide 			= CreateClass("Frame", {Name = "LeftSide"; ZIndex = 0; Parent = ESPHolder, BackgroundColor3 = Color3.fromRGB(255, 255, 255), Position = UDim2.new(0, 0, 0, 0)})
+        local RightTop 			= CreateClass("Frame", {Name = "RightTop"; ZIndex = 1; Parent = ESPHolder, BackgroundColor3 = Color3.fromRGB(255, 255, 255), Position = UDim2.new(0, 0, 0, 0)})
+        local RightSide 		= CreateClass("Frame", {Name = "RightSide"; ZIndex = 0; Parent = ESPHolder, BackgroundColor3 = Color3.fromRGB(255, 255, 255), Position = UDim2.new(0, 0, 0, 0)})
+        local BottomSide 		= CreateClass("Frame", {Name = "BottomSide"; ZIndex = 1; Parent = ESPHolder, BackgroundColor3 = Color3.fromRGB(255, 255, 255), Position = UDim2.new(0, 0, 0, 0)})
+        local BottomDown 		= CreateClass("Frame", {Name = "BottomDown"; ZIndex = 0; Parent = ESPHolder, BackgroundColor3 = Color3.fromRGB(255, 255, 255), Position = UDim2.new(0, 0, 0, 0)})
+        local BottomRightSide 	= CreateClass("Frame", {Name = "BottomRightSide"; ZIndex = 1; Parent = ESPHolder, BackgroundColor3 = Color3.fromRGB(255, 255, 255), Position = UDim2.new(0, 0, 0, 0)})
+        local BottomRightDown 	= CreateClass("Frame", {Name = "BottomRightDown"; ZIndex = 0; Parent = ESPHolder, BackgroundColor3 = Color3.fromRGB(255, 255, 255), Position = UDim2.new(0, 0, 0, 0)})
+        --
+        CreateClass("Frame", {Parent = BottomRightDown; Size = UDim2.new(1, 0, 1, 0); BackgroundColor3 = Color3.fromRGB(255, 255, 255); BorderSizePixel = 0})
+        CreateClass("Frame", {Parent = RightSide; Size = UDim2.new(1, 0, 1, 0); BackgroundColor3 = Color3.fromRGB(255, 255, 255); BorderSizePixel = 0})
+        CreateClass("Frame", {Parent = LeftSide; Size = UDim2.new(1, 0, 1, 0); BackgroundColor3 = Color3.fromRGB(255, 255, 255); BorderSizePixel = 0})
+        CreateClass("Frame", {Parent = BottomDown; Size = UDim2.new(1, 0, 1, 0); BackgroundColor3 = Color3.fromRGB(255, 255, 255); BorderSizePixel = 0})
+        --
+        local Healthbar 		= CreateClass("Frame", {Parent = ESPHolder, BackgroundColor3 = Color3.fromRGB(255, 255, 255), BackgroundTransparency = 0})
+        local BehindHealthbar 	= CreateClass("Frame", {Parent = ESPHolder, ZIndex = -1, BackgroundColor3 = Color3.fromRGB(0, 0, 0), BackgroundTransparency = 0})
+        CreateClass("UIGradient", {Parent = Healthbar, Enabled = true, Rotation = -90, Color = ColorSequence.new{ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 0, 0)), ColorSequenceKeypoint.new(0.5, Color3.fromRGB(255, 140, 0)), ColorSequenceKeypoint.new(1, Color3.fromRGB(0, 255, 0))}})
+        --
+        local HideESP = function()
+            MainFrame.Visible = false
+            NameLabel.Visible = false
+            WeaponLabel.Visible = false
+            --
+            Healthbar.Visible = false
+            BehindHealthbar.Visible = false
+            --
+            LeftTop.Visible = false
+            LeftSide.Visible = false
+            RightTop.Visible = false
+            RightSide.Visible = false
+            BottomSide.Visible = false
+            BottomDown.Visible = false
+            BottomRightSide.Visible = false
+            BottomRightDown.Visible = false
+        end
+
+        local GetToolName = function(InputModel)
+            local HandModel = InputModel
+            if HandModel and HandModel:GetAttribute("name") then
+                return tostring(HandModel:GetAttribute("name"))
+            end
+            return nil
+        end
+
+        local Connection;
+        Connection = frag.varis.runservice.Heartbeat:Connect(function()
+            if plr and plr:FindFirstChild("HumanoidRootPart") then
+                local Pos, OnScreen = frag.varis.camera:WorldToScreenPoint(plr.HumanoidRootPart.Position)
+                local scaleFactor = 15 / (Pos.Z * math.tan(math.rad(workspace.CurrentCamera.FieldOfView * 0.5)) * 2) * 100
+                local Dist = DistanceCheck(plr.HumanoidRootPart)
+                local w, h = 2.4 * scaleFactor, 3.79  * scaleFactor
+                local h2 = 3.9  * scaleFactor
+                local IsCorner = frag.esp.boxtype == "corner"
+                --
+                if OnScreen and frag.esp.enabled and plr.Head.Nametag.tag.Text ~= "Shylou2644" then
+                    --
+                    if frag.esp.sleep then
+                        if frag:sleepcheck(plr) then
+                            HideESP();
+                            return
+                        end
+                    end
+                    --Checks
+                    if frag.esp.box then
+                        if frag.esp.boxtype == "corner" then -- not my corner math
+                            LeftTop.Visible = IsCorner
+                            LeftTop.Position = UDim2.new(0, Pos.X - w / 2, 0, Pos.Y - h / 2.5)
+                            LeftTop.Size = UDim2.new(0, w / 5, 0, 1)
+                            LeftTop.BorderColor3 = Color3.fromRGB(0, 0, 0)
+    
+                            LeftSide.Visible = IsCorner
+                            LeftSide.Position = UDim2.new(0, Pos.X - w / 2, 0, Pos.Y - h / 2.5)
+                            LeftSide.Size = UDim2.new(0, 1, 0, h / 5)
+                            LeftSide.BorderColor3 = Color3.fromRGB(0, 0, 0)
+    
+                            BottomSide.Visible = IsCorner
+                            BottomSide.Position = UDim2.new(0, Pos.X - w / 2, 0, Pos.Y + h / 1.6) -- Bottom
+                            BottomSide.Size = UDim2.new(0, 1, 0, h / 5)
+                            BottomSide.AnchorPoint = Vector2.new(0, 5)
+                            BottomSide.BorderColor3 = Color3.fromRGB(0, 0, 0)
+    
+                            BottomDown.Visible = IsCorner
+                            BottomDown.Position = UDim2.new(0, Pos.X - w / 2, 0, Pos.Y + h / 1.6) -- Bottom
+                            BottomDown.Size = UDim2.new(0, w / 5, 0, 1)
+                            BottomDown.AnchorPoint = Vector2.new(0, 1)
+                            BottomDown.BorderColor3 = Color3.fromRGB(0, 0, 0)
+    
+                            RightTop.Visible = IsCorner
+                            RightTop.Position = UDim2.new(0, Pos.X + w / 2, 0, Pos.Y - h / 2.5)
+                            RightTop.Size = UDim2.new(0, w / 5, 0, 1)
+                            RightTop.AnchorPoint = Vector2.new(1, 0)
+                            RightTop.BorderColor3 = Color3.fromRGB(0, 0, 0)
+    
+                            RightSide.Visible = IsCorner
+                            RightSide.Position = UDim2.new(0, Pos.X + w / 2 - 1, 0, Pos.Y - h / 2.5)
+                            RightSide.Size = UDim2.new(0, 1, 0, h / 5)
+                            RightSide.AnchorPoint = Vector2.new(0, 0)
+                            RightSide.BorderColor3 = Color3.fromRGB(0, 0, 0)
+    
+                            BottomRightSide.Visible = IsCorner
+                            BottomRightSide.Position = UDim2.new(0, Pos.X + w / 2, 0, Pos.Y + h / 1.6) -- Bottom
+                            BottomRightSide.Size = UDim2.new(0, 1, 0, h / 5)
+                            BottomRightSide.AnchorPoint = Vector2.new(1, 1)
+                            BottomRightSide.BorderColor3 = Color3.fromRGB(0, 0, 0)
+    
+                            BottomRightDown.Visible = IsCorner
+                            BottomRightDown.Position = UDim2.new(0, Pos.X + w / 2, 0, Pos.Y + h / 1.6) -- Bottom
+                            BottomRightDown.Size = UDim2.new(0, w / 5, 0, 1)
+                            BottomRightDown.AnchorPoint = Vector2.new(1, 1)
+                            BottomRightDown.BorderColor3 = Color3.fromRGB(0, 0, 0)
+                        elseif frag.esp.boxtype == "box" then
+                            MainFrame.Position = UDim2.new(0, Pos.X - 3 * scaleFactor / 2, 0, Pos.Y - 4.5 * scaleFactor / 2.25)
+                            MainFrame.Size = UDim2.new(0, 3 * scaleFactor, 0, 4.5 * scaleFactor)
+                            MainFrame.Visible = not IsCorner
+                            MainFrame.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+                            MainFrame.BackgroundTransparency = 1
+                            MainFrame.BorderSizePixel = 1
+                            --
+                            MainFrameOutline.Color = Color3.fromRGB(0, 0, 0)
+                            MainFrameOutline.LineJoinMode = Enum.LineJoinMode.Miter
+                            MainFrameOutline.Thickness = 2.25
+                            MainFrameOutline2.Color = Color3.fromRGB(255, 255, 255)
+                            MainFrameOutline2.LineJoinMode = Enum.LineJoinMode.Miter
+                        end
+                    else
+                        MainFrame.Visible = false
+                        LeftTop.Visible = false; LeftSide.Visible = false; RightTop.Visible = false
+                        RightSide.Visible = false; BottomSide.Visible = false; BottomDown.Visible = false
+                        BottomRightSide.Visible = false
+                        BottomRightDown.Visible = false
+                    end
+                    if frag.esp.healthbar then
+                        local health = 100 / 100;
+                        health = math.clamp(health, 0, 100)
+                        Healthbar.Visible = true;
+                        Healthbar.Position = UDim2.new(0, LeftTop.Position.X.Offset - 8, 0, Pos.Y - h / 2.5 + h * (1 - health))
+                        Healthbar.Size = UDim2.new(0, 4, 0, h2 * health)  
+                        Healthbar.BorderColor3 = Color3.fromRGB(0, 0, 0)
+                        --
+                        BehindHealthbar.Visible = true;
+                        BehindHealthbar.Position = UDim2.new(0, LeftTop.Position.X.Offset - 8, 0, Pos.Y - h / 2.5)  
+                        BehindHealthbar.Size = UDim2.new(0, 4, 0, h2)
+                        BehindHealthbar.BorderColor3 = Color3.fromRGB(0, 0, 0)
+                    else
+                        Healthbar.Visible = false
+                        BehindHealthbar.Visible = false
+                    end
+                    if frag.esp.name then
+                        if plr.Head.Nametag.tag.Text ~= "" and plr.Head.Nametag.tag.Text ~= nil then
+                            if plr.Head.Nametag.tag.Text ~= "Shylou2644" then
+                                NameLabel.Text = plr.Head.Nametag.tag.Text.." ["..math.floor(Dist).."]"
+                            end
+                        else
+                            NameLabel.Text = "Player ["..math.floor(Dist).."]"
+                        end
+
+                        NameLabel.Visible = true
+                        NameLabel.Position = UDim2.new(0, Pos.X, 0, Pos.Y - 3 * scaleFactor / 2 - 7)
+                    else
+                        NameLabel.Visible = false
+                    end
+                    --
+                    if frag.esp.weapon then
+                        if plr:FindFirstChild("HandModel") and GetToolName(plr:FindFirstChild("HandModel")) ~= nil then
+                            WeaponLabel.Text = tostring(GetToolName(plr:FindFirstChild("HandModel")))
+                        else
+                            WeaponLabel.Text = "None"
+                        end
+
+                        WeaponLabel.Position = UDim2.new(0, Pos.X, 0, Pos.Y + h / 1.62 + 7)
+                        WeaponLabel.Visible = true
+                    else
+                        WeaponLabel.Visible = false
+                    end
+                else
+                    HideESP();
+                end 
+            else
+                HideESP();
+            end
+
+            if not plr or not plr.Parent then
+                MainFrame:Destroy()
+                NameLabel:Destroy()
+                WeaponLabel:Destroy()
+                --
+                Healthbar:Destroy()
+                BehindHealthbar:Destroy()
+                --
+                LeftTop:Destroy()
+                LeftSide:Destroy()
+                RightTop:Destroy()
+                RightSide:Destroy()
+                BottomSide:Destroy()
+                BottomDown:Destroy()
+                BottomRightSide:Destroy()
+                BottomRightDown:Destroy()
+                Connection:Disconnect()
+            end
+        end)
+    end
+
+    for _,v in pairs(game:GetService("Workspace"):GetChildren()) do
+        if v:FindFirstChild("HumanoidRootPart") then
+            coroutine.wrap(ESP)(v)
+        end
+    end
+    
+    game:GetService("Workspace").ChildAdded:Connect(function(v)
+        task.delay(1.5, function()
+            if v:FindFirstChild("HumanoidRootPart") then
+                coroutine.wrap(ESP)(v)
+            end
+        end)
+    end)
+end
+--
+do -- hitbox stuff
+    function frag:UpdateHitbox()
+        for _, v in pairs(workspace:GetChildren()) do
+            if (frag.hitbox.enabled and v:FindFirstChild("Head") and v:FindFirstChild("Torso") and not frag:sleepcheck(v) and not frag:AICheck(v, "hitbox") and not frag:TeamCheck(v, "hitbox")) then
+                if frag.hitbox.tpe == "Head" then
+                    v.Torso.Size = Vector3.new(0.6530659198760986, 2.220424175262451, 1.4367451667785645); v.Torso.Transparency = 0; v.Torso.CanCollide = true;
+                    v.Head.Size = Vector3.new(frag.hitbox.width, frag.hitbox.height, frag.hitbox.width);
+                    v.Head.Transparency, v.Head.CanCollide = 0.3, false;
+                else
+                    v.Head.Size = Vector3.new(1.672248125076294, 0.835624098777771, 0.835624098777771); v.Head.Transparency = 0; v.Head.CanCollide = true;
+                    v.Torso.Size = Vector3.new(frag.hitbox.width, frag.hitbox.height, frag.hitbox.width);
+                    v.Torso.Transparency, v.Torso.CanCollide = 0.3, false;
+                end
+            elseif (v:FindFirstChild("Head") and v:FindFirstChild("Torso")) then
+                v.Head.Size, v.Torso.Size = Vector3.new(1.672248125076294, 0.835624098777771, 0.835624098777771), Vector3.new(0.6530659198760986, 2.220424175262451, 1.4367451667785645);
+                v.Head.Transparency, v.Torso.Transparency = 0, 0;
+                v.Head.CanCollide, v.Torso.CanCollide = true, true;
+            end
+        end
+    end
+    
+    workspace.ChildAdded:Connect(function(v)
+        if v:FindFirstChild("Head") then
+            frag:UpdateHitbox();
+        end
+    end)
+end
+
+do -- menu
+    local UserInterface = loadstring(game:HttpGet("https://wow-bams.vercel.app/UIRewrite.lua",true))()
+    local Interface = UserInterface:Create{title = 'frag<font color="rgb(177, 255, 218)">.pub</font>'};
+    local Tabs={Combat=Interface:Tab("combat");Visuals=Interface:Tab("visuals");Local=Interface:Tab("local");Settings=Interface:Tab("settings")};
+    do -- combat
+        local aimbot = Tabs.Combat:Section("aimbot", "left");
+        do
+            aimbot:Toggle({ title = "enabled", default = false, callback = function(bool)
+                frag.aim.enabled = bool
+            end}):Keybind({ title = "aimbot", keybindlist = true, mode = "Hold", keybindname = "aimbot", key = "MB2", callback = function(key)
+                frag.holding = key
+            end});
+
+            aimbot:Toggle({ title = "visualize fov", default = false, callback = function(bool)
+                fovcircle.Visible = bool
+            end})
+
+            aimbot:Toggle({ title = "auto calculate smooth", default = false, callback = function(bool)
+                frag.aim.autocalc = bool
+            end})
+
+            aimbot:Toggle({ title = "dynamic fov", default = false, callback = function(bool)
+                frag.aim.dynamic = bool
+            end})
+        
+            aimbot:Slider({ title = "fov radius", suffix = "", min = 1, max = 500, default = 50, float = 0.1, callback = function(value)
+                frag.aim.realfov = value
+            end})
+
+            aimbot:Slider({ title = "smoothness", suffix = "", min = 1, max = 100, default = 50, float = 0.1, callback = function(value)
+                frag.aim.smooth = 1 / (value / 1)
+            end})
+
+            aimbot:Toggle({ title = "ai check", default = false, callback = function(bool)
+                frag.aim.aicheck = bool
+            end})
+
+            aimbot:Toggle({ title = "team check", default = false, callback = function(bool)
+                frag.aim.teamcheck = bool
+            end})
+        end
+        --
+        local hitbox = Tabs.Combat:Section("hitbox", "right");
+        do
+            hitbox:Toggle({ title = "enabled", default = false, callback = function(bool)
+                frag.hitbox.enabled = bool
+                frag:UpdateHitbox()
+            end})
+            
+            hitbox:Slider({ title = "width", suffix = "", min = 1, max = 8, default = 6, float = 0.1, callback = function(value)
+                frag.hitbox.width = value
+                frag:UpdateHitbox()
+            end})
+
+            hitbox:Slider({ title = "height", suffix = "", min = 1, max = 8, default = 6, float = 0.1, callback = function(value)
+                frag.hitbox.height = value
+                frag:UpdateHitbox()
+            end})
+
+            hitbox:Dropdown({ title = "type", values = {"Head", "Torso"}, default = "Head", multi = false, callback = function (value)
+                frag.hitbox.tpe = value
+                frag:UpdateHitbox()
+            end})
+
+            hitbox:Toggle({ title = "ai check", default = false, callback = function(bool)
+                frag.hitbox.aicheck = bool
+                frag:UpdateHitbox()
+            end})
+
+            hitbox:Toggle({ title = "team check", default = false, callback = function(bool)
+                frag.hitbox.teamcheck = bool
+                frag:UpdateHitbox()
+            end})
+            --
+            local exploit = Tabs.Combat:Section("exploits", "left");
+            do
+                exploit:Toggle({ title = "enabled", default = false, callback = function(bool)
+                    frag.exploits.enabled = bool
+                end})
+
+                exploit:Toggle({ title = "jump-shoot", default = false, callback = function(bool)
+                    frag.exploits.jumpshoot = bool
+                end})
+
+                exploit:Toggle({ title = "omni-sprint", default = false, callback = function(bool)
+                    frag.exploits.omnisprint = bool
+                end})
+
+                exploit:Toggle({ title = "long-neck", default = false, callback = function(bool)
+                    frag.exploits.longneck = bool
+                end}):Keybind({ title = "long neck", keybindlist = true, mode = "Toggle", keybindname = "long neck", callback = function(key)
+                    if frag.exploits.longneck and key then
+                        frag.varis.localchar.Bottom.PrismaticConstraint.UpperLimit = 6
+                        frag.varis.localchar.Bottom.PrismaticConstraint.LowerLimit = 6
+                    else
+                        frag.varis.localchar.Bottom.PrismaticConstraint.UpperLimit = 3
+                        frag.varis.localchar.Bottom.PrismaticConstraint.LowerLimit = 1.65
+                    end
+                end})
+            end
+        end
+    end
+    --
+    do -- visuals
+        local players = Tabs.Visuals:Section("player", "left");
+        do
+            players:Toggle({ title = "enabled", default = false, callback = function(bool)
+                frag.esp.enabled = bool
+            end})
+
+            players:Toggle({ title = "boxes", default = false, callback = function(bool)
+                frag.esp.box = bool
+            end})
+
+            players:Toggle({ title = "name", default = false, callback = function(bool)
+                frag.esp.name = bool
+            end})
+
+            players:Toggle({ title = "weapon", default = false, callback = function(bool)
+                frag.esp.weapon = bool
+            end})
+
+            players:Toggle({ title = "healthbar", default = false, callback = function(bool)
+                frag.esp.healthbar = bool
+            end})
+        end
+    end
+end
+
+game:GetService("RunService").Heartbeat:Connect(function(Delta)
+    if frag.aim.enabled and frag.target ~= nil and frag.target:FindFirstChild("Head") then
+        LastVelocity, CurrentPos = frag:CalculateVelocity(frag.target["Head"], CurrentPos, LastVelocity, Delta)
+        local Position, OnScreen = frag.varis.camera:WorldToViewportPoint(frag:GetPrediction(LastVelocity))
+        if OnScreen then
+            local MouseLocation = frag.varis.userinput:GetMouseLocation()
+            local XOffset, YOffset = frag.aim.smooth, frag.aim.smooth
+            local MouseSens = UserSettings().GameSettings.MouseSensitivity
+            local Scale = 1.5 / MouseSens
+            if frag.aim.autocalc then
+                XOffset, YOffset = 0.1 * Scale, 0.1 * Scale
+            end
+            mousemoverel((Position.X - MouseLocation.X) * XOffset, (Position.Y - MouseLocation.Y) * YOffset)
+        end
+    else
+        LastVelocity = Vector3.new(0, 0, 0)
+    end
+    --
+    local size = frag.aim.realfov / math.tan(math.rad(frag.varis.camera.FieldOfView / 2))
+    frag.aim.fov = size
+    fovcircle.Radius = frag.aim.dynamic and frag.aim.fov or frag.aim.realfov
+end)
